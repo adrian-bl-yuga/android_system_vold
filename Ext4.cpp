@@ -159,3 +159,48 @@ int Ext4::format(const char *fsPath, unsigned int numSectors, const char *mountp
     }
     return 0;
 }
+
+int Ext4::check(const char *fsPath) {
+    int rc = 0;
+    int status;
+
+    const char *args[3];
+    args[0] = "/system/bin/e2fsck";
+    args[1] = "-p";
+    args[2] = fsPath;
+
+    rc = android_fork_execvp(ARRAY_SIZE(args), (char **)args, &status,
+            false, true);
+
+    if (rc != 0) {
+        SLOGE("Filesystem (ext4) check failed due to logwrap error");
+        errno = EIO;
+        return -1;
+    }
+
+    if (!WIFEXITED(status)) {
+        SLOGE("Filesystem (ext4) check did not exit properly");
+        errno = EIO;
+        return -1;
+    }
+
+    status = WEXITSTATUS(status);
+
+    switch(status) {
+        case 0:
+        case 1:
+        case 2:
+            SLOGW("ext4fs: Filesystem check exited with state %d\n", status);
+            return 0;
+        case 8:
+            SLOGW("ext4fs: Filesystem check returned operational error\n");
+            errno = ENODATA;
+            return -1;
+        default:
+            SLOGW("ext4fs: Filesystem check returned unknown error: %d\n", status);
+            errno = EIO;
+            return -1;
+    }
+    // not reached
+    return -1;
+}

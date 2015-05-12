@@ -46,6 +46,7 @@
 #include "VolumeManager.h"
 #include "ResponseCode.h"
 #include "Fat.h"
+#include "Ext4.h"
 #include "Process.h"
 #include "cryptfs.h"
 
@@ -414,6 +415,7 @@ int Volume::mountVol() {
 
     for (i = 0; i < n; i++) {
         char devicePath[255];
+        bool isExt4 = false;
 
         sprintf(devicePath, "/dev/block/vold/%d:%d", major(deviceNodes[i]),
                 minor(deviceNodes[i]));
@@ -426,7 +428,8 @@ int Volume::mountVol() {
         if (Fat::check(devicePath)) {
             if (errno == ENODATA) {
                 SLOGW("%s does not contain a FAT filesystem\n", devicePath);
-                continue;
+                isExt4 = true;
+                goto TRY_EXT4;
             }
             errno = EIO;
             /* Badness - abort the mount */
@@ -435,13 +438,34 @@ int Volume::mountVol() {
             return -1;
         }
 
+TRY_EXT4:
+        if (isExt4) { // dosfsck failed, but we may try it as ext4
+            if (Ext4::check(devicePath)) {
+                SLOGW("%s does not contain a Ext4 filesystem\n", devicePath);
+                continue;
+            } else {
+                SLOGW("%s passed e2fsck\n", devicePath);
+            }
+        }
+
         errno = 0;
         int gid;
 
-        if (Fat::doMount(devicePath, getMountpoint(), false, false, false,
-                AID_MEDIA_RW, AID_MEDIA_RW, 0007, true)) {
-            SLOGE("%s failed to mount via VFAT (%s)\n", devicePath, strerror(errno));
-            continue;
+        if (isExt4) {
+            if (Ext4::doMount(devicePath, getMountpoint(), false, false, false)) {
+                SLOGE("%s failed to mount via EXT4 (%s)\n", devicePath, strerror(errno));
+                continue;
+            }
+            SLOGE("%s was mounted as an ext4fs\n", devicePath);
+            SLOGE("--> WARNING: If this device was mounted for the first time, you *MUST* run...\n");
+            SLOGE("# restorecon -r %s ; chmod 0770 %s ; chown %d:%d %s\n", getMountpoint(), getMountpoint(), AID_MEDIA_RW, AID_MEDIA_RW, getMountpoint());
+            SLOGE("--> WARNING: ...to make the sdcard useable\n");
+        } else {
+            if (Fat::doMount(devicePath, getMountpoint(), false, false, false,
+                    AID_MEDIA_RW, AID_MEDIA_RW, 0007, true)) {
+                SLOGE("%s failed to mount via VFAT (%s)\n", devicePath, strerror(errno));
+                continue;
+            }
         }
 
         extractMetadata(devicePath);
